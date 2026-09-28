@@ -1,0 +1,127 @@
+name: auto update docker and dockerd
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v4
+
+      - name: update docker and dockerd
+        id: update
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+
+          auth=()
+          [ -z "$GH_TOKEN" ] || auth=(-H "Authorization: token $GH_TOKEN")
+
+          latest_tag=$(curl -fsSL "${auth[@]}" \
+            "https://api.github.com/repos/moby/moby/releases/latest" | jq -r .tag_name)
+          version=${latest_tag#docker-v}
+
+          if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "Error: unexpected latest moby release tag: $latest_tag"
+            exit 1
+          fi
+
+          short_commit() {
+            local repo="$1" tag="$2" sha
+            sha=$(git ls-remote "https://github.com/${repo}.git" "refs/tags/${tag}" "refs/tags/${tag}^{}" | awk 'END{print $1}')
+            [ -n "$sha" ] || return 1
+            echo "${sha:0:7}"
+          }
+
+          update_makefile() {
+            local makefile="$1" pkg_version="$2" repo="$3" tag="$4" url="$5" hash commit
+            commit=$(short_commit "$repo" "$tag")
+            hash=$(curl -fsSL "$url" | sha256sum | awk '{print $1}')
+            if [ -z "$commit" ] || [ "$hash" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+              echo "Error: failed to resolve commit/hash for $repo $tag"
+              exit 1
+            fi
+            sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$pkg_version/" "$makefile"
+            sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=1/" "$makefile"
+            sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" "$makefile"
+            sed -i "s/^PKG_GIT_SHORT_COMMIT:=.*/PKG_GIT_SHORT_COMMIT:=$commit/" "$makefile"
+            echo "Updated $makefile -> $pkg_version ($commit)"
+          }
+
+          get_version() { grep "^PKG_VERSION:=" "$1" | awk -F'=' '{print $2}' | tr -d ' '; }
+
+          containerd_version=""
+          runc_version=""
+          if [ -f containerd/Makefile ] || [ -f runc/Makefile ]; then
+            dockerfile=$(curl -fsSL "https://raw.githubusercontent.com/moby/moby/docker-v${version}/Dockerfile") || {
+              echo "Error: failed to fetch moby Dockerfile for docker-v${version}"
+              exit 1
+            }
+            containerd_version=$(echo "$dockerfile" | grep -Po '(?<=^ARG CONTAINERD_VERSION=v)[0-9][0-9.]*' | head -n1)
+            runc_version=$(echo "$dockerfile" | grep -Po '(?<=^ARG RUNC_VERSION=v)[0-9][0-9.]*' | head -n1)
+            if [ -z "$containerd_version" ] || [ -z "$runc_version" ]; then
+              echo "Error: failed to extract containerd/runc versions from moby Dockerfile"
+              exit 1
+            fi
+            echo "docker:     $version"
+            echo "containerd: $containerd_version"
+            echo "runc:       $runc_version"
+          fi
+
+          changed=false
+          message=""
+
+          if [ "$(get_version docker/Makefile)" != "$version" ] || [ "$(get_version dockerd/Makefile)" != "$version" ]; then
+            if ! short_commit docker/cli "v${version}" >/dev/null; then
+              echo "docker/cli v${version} is not released yet, skip docker/dockerd"
+            else
+              update_makefile dockerd/Makefile "$version" moby/moby "docker-v${version}" \
+                "https://codeload.github.com/moby/moby/tar.gz/docker-v${version}?"
+              update_makefile docker/Makefile "$version" docker/cli "v${version}" \
+                "https://codeload.github.com/docker/cli/tar.gz/v${version}?"
+              changed=true
+              message="docker, dockerd: update to $version"
+            fi
+          fi
+
+          if [ -f containerd/Makefile ] && [ "$(get_version containerd/Makefile)" != "$containerd_version" ]; then
+            update_makefile containerd/Makefile "$containerd_version" containerd/containerd "v${containerd_version}" \
+              "https://codeload.github.com/containerd/containerd/tar.gz/v${containerd_version}?"
+            changed=true
+            if [ -z "$message" ]; then
+              message="containerd: update to $containerd_version"
+            else
+              message="$message; containerd: update to $containerd_version"
+            fi
+          fi
+
+          if [ -f runc/Makefile ] && [ "$(get_version runc/Makefile)" != "$runc_version" ]; then
+            update_makefile runc/Makefile "$runc_version" opencontainers/runc "v${runc_version}" \
+              "https://codeload.github.com/opencontainers/runc/tar.gz/v${runc_version}?"
+            changed=true
+            if [ -z "$message" ]; then
+              message="runc: update to $runc_version"
+            else
+              message="$message; runc: update to $runc_version"
+            fi
+          fi
+
+          echo "updated=$changed" >> "$GITHUB_OUTPUT"
+          echo "message=$message" >> "$GITHUB_OUTPUT"
+
+      - name: commit and push
+        if: steps.update.outputs.updated == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -m "${{ steps.update.outputs.message }}"
+          git push
