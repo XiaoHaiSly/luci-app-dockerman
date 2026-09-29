@@ -379,7 +379,7 @@ function _docker.new(options)
     tls_cacert = _options.tls and _options.tls_cacert or nil,
     tls_cert = _options.tls and _options.tls_cert or nil,
     tls_key = _options.tls and _options.tls_key or nil,
-    version = _options.version or "v1.40",
+    version = _options.version or "v1.47",
     user_agent = _options.user_agent or "LuCI",
     protocol = _options.protocol or "HTTP/1.1",
     debug = _options.debug or false,
