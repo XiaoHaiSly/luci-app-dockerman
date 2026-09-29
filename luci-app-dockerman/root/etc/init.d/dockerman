@@ -7,24 +7,41 @@ config_load 'dockerd'
 # config_get daemon_ea "dockerman" daemon_ea
 _DOCKERD=/etc/init.d/dockerd
 
+DOCKERD_CONF_FILE="/tmp/dockerd/daemon.json"
+NFT_TABLE="dockerman"
+NFT_FILE="/tmp/dockerman.nft"
+NFT_BRIDGE="docker0"
+
 dockerman_firewall_backend() {
 	local backend=""
+
 	backend="$(uci -q get dockerd.globals.firewall_backend 2>/dev/null)"
-	[ -n "${backend}" ] || backend="nftables"
+	if [ -z "${backend}" ] && [ -r "${DOCKERD_CONF_FILE}" ] && \
+		grep -qE '"firewall-backend"[[:space:]]*:[[:space:]]*"nftables"' "${DOCKERD_CONF_FILE}" 2>/dev/null; then
+		backend="nftables"
+	fi
+	[ "${backend}" = "nftables" ] || backend="iptables"
+
 	echo "${backend}"
 }
 
-dockerman_use_iptables() {
-	local backend=""
+dockerman_firewall_managed() {
 	local iptables_enabled=""
-
-	backend="$(dockerman_firewall_backend)"
-	[ "${backend}" = "iptables" ] || return 1
 
 	iptables_enabled="$(uci -q get dockerd.globals.iptables 2>/dev/null)"
 	[ -n "${iptables_enabled}" ] || iptables_enabled="1"
 
 	[ "${iptables_enabled}" = "1" ]
+}
+
+dockerman_use_iptables() {
+	[ "$(dockerman_firewall_backend)" = "iptables" ] || return 1
+	dockerman_firewall_managed
+}
+
+dockerman_use_nftables() {
+	[ "$(dockerman_firewall_backend)" = "nftables" ] || return 1
+	dockerman_firewall_managed
 }
 
 docker_running(){
@@ -121,12 +138,95 @@ handle_allowed_interface(){
 	iptables_append DOCKER-MAN -j RETURN >/dev/null 2>&1
 }
 
+nft_warn() {
+	logger -t "dockerman" -p daemon.warn "$1"
+}
+
+nft_add_interface() {
+	case "$1" in
+		""|*[!A-Za-z0-9_.:@+*-]*)
+			nft_warn "ignore invalid allowed interface '$1'"
+			return
+			;;
+	esac
+	printf '\t\tiifname "%s" oifname "%s" accept\n' "$1" "${NFT_BRIDGE}" >> "${NFT_FILE}.body"
+}
+
+nft_add_port() {
+	local port="${1%/*}"
+	local proto="${1#*/}"
+
+	case "${proto}" in
+		tcp|udp) ;;
+		*) nft_warn "ignore invalid allowed port '$1'"; return ;;
+	esac
+	case "${port}" in
+		""|*[!0-9]*) nft_warn "ignore invalid allowed port '$1'"; return ;;
+	esac
+	[ "${port}" -ge 1 ] && [ "${port}" -le 65535 ] || {
+		nft_warn "ignore invalid allowed port '$1'"
+		return
+	}
+	printf '\t\toifname "%s" meta l4proto %s ct direction original ct original proto-dst %s accept\n' \
+		"${NFT_BRIDGE}" "${proto}" "${port}" >> "${NFT_FILE}.body"
+}
+
+init_dockerman_nft() {
+	local err=""
+
+	command -v nft >/dev/null 2>&1 || {
+		nft_warn "nft not found, access control not applied"
+		return 1
+	}
+
+	: > "${NFT_FILE}.body"
+	config_list_foreach "dockerman" "ac_allowed_interface" nft_add_interface
+	config_list_foreach "dockerman" "ac_allowed_ports" nft_add_port
+
+	{
+		echo "add table inet ${NFT_TABLE}"
+		echo "delete table inet ${NFT_TABLE}"
+		echo "table inet ${NFT_TABLE} {"
+		echo "	chain forward {"
+		echo "		type filter hook forward priority filter; policy accept;"
+		echo "		iifname \"${NFT_BRIDGE}\" oifname \"${NFT_BRIDGE}\" accept"
+		echo "		oifname \"${NFT_BRIDGE}\" ct state established,related accept"
+		cat "${NFT_FILE}.body"
+		echo "		oifname \"${NFT_BRIDGE}\" ct state new,invalid drop"
+		echo "	}"
+		echo "}"
+	} > "${NFT_FILE}"
+	rm -f "${NFT_FILE}.body"
+
+	err="$(nft -c -f "${NFT_FILE}" 2>&1)" || {
+		nft_warn "invalid nftables ruleset, access control not applied: ${err}"
+		return 1
+	}
+	err="$(nft -f "${NFT_FILE}" 2>&1)" || {
+		nft_warn "failed to load nftables ruleset: ${err}"
+		return 1
+	}
+}
+
+delete_dockerman_nft() {
+	command -v nft >/dev/null 2>&1 || return 0
+	nft list table inet "${NFT_TABLE}" >/dev/null 2>&1 && \
+		nft delete table inet "${NFT_TABLE}" >/dev/null 2>&1
+	rm -f "${NFT_FILE}" "${NFT_FILE}.body"
+	return 0
+}
+
 start_service(){
 	[ -x "$_DOCKERD" ] && $($_DOCKERD enabled) || return 0
 	delete_dockerman_chain
+	delete_dockerman_nft
+	if dockerman_use_nftables; then
+		init_dockerman_nft
+		return 0
+	fi
 	$($_DOCKERD running) && docker_running || return 0
 	dockerman_use_iptables || {
-		logger -t "dockerman" -p notice "dockerd firewall backend is nftables; skip DOCKER-MAN iptables chain management"
+		logger -t "dockerman" -p notice "docker firewall management is disabled (dockerd.globals.iptables=0); skip access control"
 		return 0
 	}
 	init_dockerman_chain
@@ -136,6 +236,7 @@ start_service(){
 
 stop_service(){
 	delete_dockerman_chain
+	delete_dockerman_nft
 }
 
 service_triggers() {
