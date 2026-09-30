@@ -1,8 +1,8 @@
-name: auto update docker and dockerd
+name: auto update docker toolchain
 
 on:
   schedule:
-    - cron: '0 12 * * *'
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 permissions:
@@ -15,7 +15,7 @@ jobs:
       - name: checkout repository
         uses: actions/checkout@v7
 
-      - name: update docker and dockerd
+      - name: update docker toolchain
         id: update
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
