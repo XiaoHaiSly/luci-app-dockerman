@@ -2,7 +2,7 @@ name: auto update docker and dockerd
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    - cron: '0 12 * * *'
   workflow_dispatch:
 
 permissions:
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: update docker and dockerd
         id: update
