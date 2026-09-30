@@ -1,0 +1,69 @@
+name: auto update docker-compose
+
+on:
+  schedule:
+    - cron: '30 0 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout repository
+        uses: actions/checkout@v7
+
+      - name: update docker-compose
+        id: update
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eo pipefail
+
+          makefile=docker-compose/Makefile
+          auth=()
+          [ -z "$GH_TOKEN" ] || auth=(-H "Authorization: token $GH_TOKEN")
+
+          latest_tag=$(curl -fsSL "${auth[@]}" \
+            "https://api.github.com/repos/docker/compose/releases/latest" | jq -r .tag_name)
+          version=${latest_tag#v}
+
+          if ! [[ "$version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+            echo "Error: unexpected latest compose release tag: $latest_tag"
+            exit 1
+          fi
+
+          current=$(grep "^PKG_VERSION:=" "$makefile" | awk -F'=' '{print $2}' | tr -d ' ')
+          if [ "$current" = "$version" ]; then
+            echo "docker-compose is up to date ($current)"
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          hash=$(curl -fsSL "https://codeload.github.com/docker/compose/tar.gz/v${version}?" | sha256sum | awk '{print $1}')
+          if [ -z "$hash" ] || [ "$hash" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
+            echo "Error: failed to compute hash for compose v${version}"
+            exit 1
+          fi
+
+          sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$version/" "$makefile"
+          sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=1/" "$makefile"
+          sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" "$makefile"
+          # major version bump: sync the Go module path (github.com/docker/compose/vN)
+          sed -i -E "s#github.com/docker/compose/v[0-9]+#github.com/docker/compose/v${version%%.*}#g" "$makefile"
+
+          echo "Updated $makefile: $current -> $version"
+          echo "updated=true" >> "$GITHUB_OUTPUT"
+          echo "message=docker-compose: update to $version" >> "$GITHUB_OUTPUT"
+
+      - name: commit and push
+        if: steps.update.outputs.updated == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -u
+          git commit -m "${{ steps.update.outputs.message }}"
+          git pull --rebase
+          git push
