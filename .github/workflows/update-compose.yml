@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@v4
 
       - name: update docker-compose
         id: update
@@ -42,17 +42,77 @@ jobs:
             exit 0
           fi
 
-          hash=$(curl -fsSL "https://codeload.github.com/docker/compose/tar.gz/v${version}?" | sha256sum | awk '{print $1}')
+          # download the source once: hash it, then inspect it to keep the Makefile paths correct
+          tmp=$(mktemp -d)
+          curl -fsSL "https://codeload.github.com/docker/compose/tar.gz/v${version}?" -o "$tmp/src.tgz"
+          hash=$(sha256sum "$tmp/src.tgz" | awk '{print $1}')
           if [ -z "$hash" ] || [ "$hash" = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" ]; then
-            echo "Error: failed to compute hash for compose v${version}"
+            echo "::error::failed to compute hash for compose v${version}"
             exit 1
           fi
+          src="$tmp/src"
+          mkdir "$src"
+          tar -xzf "$tmp/src.tgz" -C "$src" --strip-components=1
+
+          get_var() { grep -m1 "^$1:=" "$makefile" | cut -d= -f2-; }
+          old_mod=$(get_var GO_PKG)
+          old_build=$(get_var GO_PKG_BUILD_PKG)
+          old_ldx=$(get_var GO_PKG_LDFLAGS_X)
+
+          # 1. Go module path: read it from the new source's go.mod (works for v6, v7 or any rename)
+          new_mod=$(awk '/^module /{print $2; exit}' "$src/go.mod")
+          if [ -z "$new_mod" ]; then
+            echo "::error::cannot read module path from go.mod of compose v${version}"
+            exit 1
+          fi
+
+          # 2. main package (GO_PKG_BUILD_PKG): keep the current sub-path if it still is one, else look in cmd/
+          build_sub=${old_build#"$old_mod"}
+          if ! grep -q '^package main' "$src$build_sub"/*.go 2>/dev/null; then
+            mapfile -t mains < <(find "$src/cmd" -maxdepth 2 -name '*.go' ! -name '*_test.go' \
+              -exec grep -l '^package main' {} + 2>/dev/null | xargs -r -n1 dirname | sort -u)
+            if [ "${#mains[@]}" -eq 1 ]; then
+              build_sub=${mains[0]#"$src"}
+              echo "main package moved: ${old_build#"$old_mod"} -> $build_sub"
+            else
+              echo "::error::compose v${version}: cannot find a unique main package under cmd/, Makefile not changed"
+              exit 1
+            fi
+          fi
+
+          # 3. version variable used by -X (GO_PKG_LDFLAGS_X): non-fatal, only affects 'docker compose version'
+          ldx_target=${old_ldx%%=*}
+          ldx_val=${old_ldx#*=}
+          ldx_var=${ldx_target##*.}
+          ldx_sub=${ldx_target#"$old_mod"}
+          ldx_sub=${ldx_sub%.*}
+          if ! grep -qE "^\s*var\s+${ldx_var}\s*=" "$src$ldx_sub"/*.go 2>/dev/null; then
+            mapfile -t vdirs < <(grep -rlE "^\s*var\s+${ldx_var}\s*=" "$src/internal" --include='*.go' 2>/dev/null \
+              | xargs -r -n1 dirname | sort -u)
+            if [ "${#vdirs[@]}" -eq 1 ]; then
+              ldx_sub=${vdirs[0]#"$src"}
+              echo "version variable moved: -> $ldx_sub.$ldx_var"
+            else
+              echo "::warning::compose v${version}: cannot find ${ldx_var} variable, keeping old -X path (version output may be wrong)"
+            fi
+          fi
+
+          new_build="${new_mod}${build_sub}"
+          old_bin=${old_build##*/}
+          new_bin=${new_build##*/}
 
           sed -i "s/^PKG_VERSION:=.*/PKG_VERSION:=$version/" "$makefile"
           sed -i "s/^PKG_RELEASE:=.*/PKG_RELEASE:=1/" "$makefile"
           sed -i "s/^PKG_HASH:=.*/PKG_HASH:=$hash/" "$makefile"
-          # major version bump: sync the Go module path (github.com/docker/compose/vN)
-          sed -i -E "s#github.com/docker/compose/v[0-9]+#github.com/docker/compose/v${version%%.*}#g" "$makefile"
+          sed -i "s#^GO_PKG:=.*#GO_PKG:=${new_mod}#" "$makefile"
+          sed -i "s#^GO_PKG_BUILD_PKG:=.*#GO_PKG_BUILD_PKG:=${new_build}#" "$makefile"
+          sed -i "s#^GO_PKG_LDFLAGS_X:=.*#GO_PKG_LDFLAGS_X:=${new_mod}${ldx_sub}.${ldx_var}=${ldx_val}#" "$makefile"
+          # the built binary is named after the last element of GO_PKG_BUILD_PKG
+          if [ "$old_bin" != "$new_bin" ]; then
+            sed -i "s#GO_PKG_BUILD_BIN_DIR)/${old_bin}#GO_PKG_BUILD_BIN_DIR)/${new_bin}#" "$makefile"
+          fi
+
+          echo "compose v${version} requires: $(grep -m1 '^go ' "$src/go.mod")"
 
           echo "Updated $makefile: $current -> $version"
           echo "updated=true" >> "$GITHUB_OUTPUT"
