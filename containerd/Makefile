@@ -36,12 +36,7 @@ define Package/containerd/description
 An industry-standard container runtime with an emphasis on simplicity, robustness and portability
 endef
 
-GO_PKG_INSTALL_EXTRA:=\
-	vendor/google.golang.org/protobuf/internal/editiondefaults/editions_defaults.binpb \
-	vendor/github.com/urfave/cli/v3/autocomplete \
-	vendor/github.com/urfave/cli-docs/v3/markdown.md.gotmpl \
-	Makefile \
-	vendor/modules.txt
+GO_PKG_INSTALL_ALL:=1
 
 MAKE_PATH:=$(GO_PKG_WORK_DIR_NAME)/build/src/$(GO_PKG)
 MAKE_VARS += $(GO_PKG_VARS)
