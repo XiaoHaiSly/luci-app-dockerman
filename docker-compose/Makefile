@@ -20,6 +20,7 @@ GO_PKG:=github.com/docker/compose/v5
 GO_PKG_BUILD_PKG:=github.com/docker/compose/v5/cmd
 GO_PKG_LDFLAGS_X:=github.com/docker/compose/v5/internal.Version=v$(PKG_VERSION)
 GO_PKG_TAGS:=e2e,kube
+GO_PKG_INSTALL_ALL:=1
 
 include $(INCLUDE_DIR)/package.mk
 include ../../lang/golang/golang-package.mk
