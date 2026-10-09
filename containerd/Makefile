@@ -36,8 +36,14 @@ define Package/containerd/description
 An industry-standard container runtime with an emphasis on simplicity, robustness and portability
 endef
 
+# containerd 2.4 vendors modules that //go:embed non-.go files (e.g. urfave/cli/v3
+# "autocomplete", cli-docs "markdown.md.gotmpl"). Copy the whole source tree into
+# the GOPATH work dir (same as runc) so no embedded file can be missed again.
+GO_PKG_INSTALL_ALL:=1
 GO_PKG_INSTALL_EXTRA:=\
 	vendor/google.golang.org/protobuf/internal/editiondefaults/editions_defaults.binpb \
+	vendor/github.com/urfave/cli/v3/autocomplete \
+	vendor/github.com/urfave/cli-docs/v3/markdown.md.gotmpl \
 	Makefile \
 	vendor/modules.txt
 
