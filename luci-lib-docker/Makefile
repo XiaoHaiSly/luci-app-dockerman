@@ -2,7 +2,9 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=luci-lib-docker
 PKG_LICENSE:=AGPL-3.0
-PKG_VERSION:=0.3.4
+PKG_VERSION:=2026.10.18
+PKG_RELEASE:=2
+PKG_PO_VERSION:=$(PKG_VERSION)-r$(PKG_RELEASE)
 PKG_MAINTAINER:=lisaac <lisaac.cn@gmail.com> \
 	Florian Eckert <fe@dev.tdt.de>
 
