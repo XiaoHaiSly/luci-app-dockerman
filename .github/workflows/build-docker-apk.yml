@@ -2,6 +2,8 @@ name: Build & Release
 
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 4'
 
 permissions:
   contents: read
