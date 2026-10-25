@@ -113,6 +113,9 @@ jobs:
             echo "CONFIG_BUILD_LOG=y"
             for p in $PKGS; do
               echo "CONFIG_PACKAGE_${p}=m"
+              case "$p" in
+                luci-app-*) echo "CONFIG_PACKAGE_luci-i18n-${p#luci-app-}-zh-cn=m" ;;
+              esac
             done
           } > "$SDK_ROOT/.config"
 
@@ -136,9 +139,14 @@ jobs:
           while IFS= read -r -d '' apk; do
             name="$("$SDK_ROOT/staging_dir/host/bin/apk" adbdump "$apk" | awk '/^  name: / { sub(/^  name: /, ""); print; exit }')"
 
-            case " $PKGS " in
-              *" $name "*) ;;
-              *) continue ;;
+            case "$name" in
+              luci-i18n-*-zh-cn) ;;
+              *)
+                case " $PKGS " in
+                  *" $name "*) ;;
+                  *) continue ;;
+                esac
+                ;;
             esac
 
             cp -p "$apk" "$RUNNER_TEMP/output/"
