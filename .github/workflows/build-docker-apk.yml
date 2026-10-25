@@ -151,25 +151,27 @@ jobs:
 
           ls -l "$RUNNER_TEMP/output"
 
-      - name: Generate signed index
+      - name: Generate index
         env:
           APK_PRIVATE_KEY: ${{ secrets.APK_PRIVATE_KEY }}
         run: |
-          [[ -n "$APK_PRIVATE_KEY" ]] || { echo "缺少仓库 Secret: APK_PRIVATE_KEY"; exit 1; }
-
-          key="$RUNNER_TEMP/private-key.pem"
-          printf '%s\n' "$APK_PRIVATE_KEY" > "$key"
-          chmod 600 "$key"
-
           cd "$RUNNER_TEMP/output"
-          "$SDK_ROOT/staging_dir/host/bin/apk" mkndx \
-            --allow-untrusted \
-            --sign "$key" \
-            --output packages.adb \
-            *.apk
+          apk_bin="$SDK_ROOT/staging_dir/host/bin/apk"
 
-          openssl ec -in "$key" -pubout -out public-key.pem
-          rm -f "$key"
+          if [[ -n "$APK_PRIVATE_KEY" ]]; then
+            echo "检测到 APK_PRIVATE_KEY，生成签名索引"
+            key="$RUNNER_TEMP/private-key.pem"
+            printf '%s\n' "$APK_PRIVATE_KEY" > "$key"
+            chmod 600 "$key"
+
+            "$apk_bin" mkndx --allow-untrusted --sign "$key" --output packages.adb *.apk
+
+            openssl ec -in "$key" -pubout -out public-key.pem
+            rm -f "$key"
+          else
+            echo "未设置 APK_PRIVATE_KEY，生成未签名索引"
+            "$apk_bin" mkndx --allow-untrusted --output packages.adb *.apk
+          fi
 
           ls -l
 
