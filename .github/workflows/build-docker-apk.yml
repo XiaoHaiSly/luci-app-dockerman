@@ -159,17 +159,19 @@ jobs:
           mkdir -p "$RUNNER_TEMP/output"
           declare -A found
 
+          want="$PKGS"
+          for p in $PKGS; do
+            case "$p" in
+              luci-app-*) want="$want luci-i18n-${p#luci-app-}-zh-cn" ;;
+            esac
+          done
+
           while IFS= read -r -d '' apk; do
             name="$("$SDK_ROOT/staging_dir/host/bin/apk" adbdump "$apk" | awk '/^  name: / { sub(/^  name: /, ""); print; exit }')"
 
-            case "$name" in
-              luci-i18n-*-zh-cn) ;;
-              *)
-                case " $PKGS " in
-                  *" $name "*) ;;
-                  *) continue ;;
-                esac
-                ;;
+            case " $want " in
+              *" $name "*) ;;
+              *) continue ;;
             esac
 
             cp -p "$apk" "$RUNNER_TEMP/output/"
