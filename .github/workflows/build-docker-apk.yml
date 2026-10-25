@@ -98,14 +98,32 @@ jobs:
           for p in $PKGS; do
             [[ -d "$p" ]]
             rm -rf "$SDK_ROOT/package/$p"
-            cp -a "$p" "$SDK_ROOT/package/$p"
-            sed -i \
-              -e 's#\.\./\.\./lang/#$(TOPDIR)/feeds/packages/lang/#' \
-              -e 's#\.\./\.\./luci\.mk#$(TOPDIR)/feeds/luci/luci.mk#' \
-              "$SDK_ROOT/package/$p/Makefile"
+            case "$p" in
+              luci-*)
+                cp -a "$p" "$SDK_ROOT/package/$p"
+                sed -i \
+                  -e 's#\.\./\.\./lang/#$(TOPDIR)/feeds/packages/lang/#' \
+                  -e 's#\.\./\.\./luci\.mk#$(TOPDIR)/feeds/luci/luci.mk#' \
+                  "$SDK_ROOT/package/$p/Makefile"
+                ;;
+              *)
+                rm -rf "$SDK_ROOT/feeds/packages/utils/$p"
+                cp -a "$p" "$SDK_ROOT/feeds/packages/utils/$p"
+                ;;
+            esac
           done
 
+          "$SDK_ROOT/scripts/feeds" update -a -i
           "$SDK_ROOT/scripts/feeds" install -a
+
+          for p in $PKGS; do
+            case "$p" in
+              luci-*) ;;
+              *)
+                [[ -f "$SDK_ROOT/package/feeds/packages/$p/Makefile" ]] || { echo "feeds 中找不到 $p"; exit 1; }
+                ;;
+            esac
+          done
 
       - name: Configure packages
         run: |
@@ -129,7 +147,11 @@ jobs:
         run: |
           targets=""
           for p in $PKGS; do
-            targets="$targets package/$p/compile"
+            if [[ -d "$SDK_ROOT/package/$p" ]]; then
+              targets="$targets package/$p/compile"
+            else
+              targets="$targets package/feeds/packages/$p/compile"
+            fi
           done
 
           make -C "$SDK_ROOT" -j"$(nproc)" $targets || \
