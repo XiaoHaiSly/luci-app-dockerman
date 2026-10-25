@@ -92,38 +92,44 @@ jobs:
           "$SDK_ROOT/scripts/feeds" update -a
 
           for p in $PKGS; do
-            find "$SDK_ROOT/feeds" -mindepth 3 -maxdepth 3 -type d -name "$p" -exec rm -rf {} +
-          done
+            [[ -f "$p/Makefile" ]] || { echo "缺少 $p/Makefile"; exit 1; }
 
-          for p in $PKGS; do
-            [[ -d "$p" ]]
+            dest=""
+            while IFS= read -r d; do
+              [[ -f "$d/Makefile" ]] || continue
+              if [[ -z "$dest" ]]; then
+                dest="$d"
+              else
+                rm -rf "$d"
+              fi
+            done < <(find "$SDK_ROOT/feeds" -maxdepth 5 -type d -name "$p" -not -path '*/.git/*')
+
             rm -rf "$SDK_ROOT/package/$p"
-            case "$p" in
-              luci-*)
-                cp -a "$p" "$SDK_ROOT/package/$p"
-                sed -i \
-                  -e 's#\.\./\.\./lang/#$(TOPDIR)/feeds/packages/lang/#' \
-                  -e 's#\.\./\.\./luci\.mk#$(TOPDIR)/feeds/luci/luci.mk#' \
-                  "$SDK_ROOT/package/$p/Makefile"
-                ;;
-              *)
-                rm -rf "$SDK_ROOT/feeds/packages/utils/$p"
-                cp -a "$p" "$SDK_ROOT/feeds/packages/utils/$p"
-                ;;
-            esac
+
+            if [[ -n "$dest" ]]; then
+              echo "$p: 官方已有，替换 ${dest#"$SDK_ROOT"/}"
+              rm -rf "$dest"
+              cp -a "$p" "$dest"
+            else
+              echo "$p: 官方没有，放进 package/"
+              cp -a "$p" "$SDK_ROOT/package/$p"
+            fi
           done
 
           "$SDK_ROOT/scripts/feeds" update -a -i
           "$SDK_ROOT/scripts/feeds" install -a
 
+          targets=""
           for p in $PKGS; do
-            case "$p" in
-              luci-*) ;;
-              *)
-                [[ -f "$SDK_ROOT/package/feeds/packages/$p/Makefile" ]] || { echo "feeds 中找不到 $p"; exit 1; }
-                ;;
-            esac
+            if [[ -d "$SDK_ROOT/package/$p" ]]; then
+              t="package/$p"
+            else
+              t="$(cd "$SDK_ROOT" && find package/feeds -mindepth 2 -maxdepth 2 -name "$p" -print -quit)"
+            fi
+            [[ -n "$t" ]] || { echo "找不到 $p"; exit 1; }
+            targets="$targets $t/compile"
           done
+          echo "TARGETS=$targets" >> "$GITHUB_ENV"
 
       - name: Configure packages
         run: |
@@ -145,17 +151,8 @@ jobs:
 
       - name: Compile packages
         run: |
-          targets=""
-          for p in $PKGS; do
-            if [[ -d "$SDK_ROOT/package/$p" ]]; then
-              targets="$targets package/$p/compile"
-            else
-              targets="$targets package/feeds/packages/$p/compile"
-            fi
-          done
-
-          make -C "$SDK_ROOT" -j"$(nproc)" $targets || \
-            make -C "$SDK_ROOT" -j1 $targets V=s
+          make -C "$SDK_ROOT" -j"$(nproc)" $TARGETS || \
+            make -C "$SDK_ROOT" -j1 $TARGETS V=s
 
       - name: Collect packages
         run: |
