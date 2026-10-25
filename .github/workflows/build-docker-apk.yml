@@ -99,6 +99,10 @@ jobs:
             [[ -d "$p" ]]
             rm -rf "$SDK_ROOT/package/$p"
             cp -a "$p" "$SDK_ROOT/package/$p"
+            sed -i \
+              -e 's#\.\./\.\./lang/#$(TOPDIR)/feeds/packages/lang/#' \
+              -e 's#\.\./\.\./luci\.mk#$(TOPDIR)/feeds/luci/luci.mk#' \
+              "$SDK_ROOT/package/$p/Makefile"
           done
 
           "$SDK_ROOT/scripts/feeds" install -a
