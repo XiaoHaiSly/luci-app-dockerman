@@ -14,7 +14,7 @@ PKG_LICENSE:=AGPL-3.0
 PKG_MAINTAINER:=lisaac <lisaac.cn@gmail.com> \
 		Florian Eckert <fe@dev.tdt.de>
 
-PKG_VERSION:=20261026
+PKG_VERSION:=20261108
 PKG_RELEASE:=1
 PKG_PO_VERSION:=$(PKG_VERSION)-r$(PKG_RELEASE)
 

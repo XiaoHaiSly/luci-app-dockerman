@@ -1,8 +1,8 @@
-name: auto update docker toolchain
+name: update docker-toolchain
 
 on:
   schedule:
-    - cron: '0 1 * * *'
+    - cron: '0 19 * * *'
   workflow_dispatch:
 
 permissions:
@@ -34,10 +34,16 @@ jobs:
             exit 1
           fi
 
-          short_commit() {
+          full_commit() {
             local repo="$1" tag="$2" sha
             sha=$(git ls-remote "https://github.com/${repo}.git" "refs/tags/${tag}" "refs/tags/${tag}^{}" | awk 'END{print $1}')
             [ -n "$sha" ] || return 1
+            echo "$sha"
+          }
+
+          short_commit() {
+            local sha
+            sha=$(full_commit "$1" "$2") || return 1
             echo "${sha:0:7}"
           }
 
@@ -88,7 +94,7 @@ jobs:
               update_makefile docker/Makefile "$version" docker/cli "v${version}" \
                 "https://codeload.github.com/docker/cli/tar.gz/v${version}?"
               changed=true
-              message="docker, dockerd: update to $version"
+              message="docker, dockerd 至 $version"
             fi
           fi
 
@@ -97,9 +103,9 @@ jobs:
               "https://codeload.github.com/containerd/containerd/tar.gz/v${containerd_version}?"
             changed=true
             if [ -z "$message" ]; then
-              message="containerd: update to $containerd_version"
+              message="containerd 至 $containerd_version"
             else
-              message="$message; containerd: update to $containerd_version"
+              message="$message; containerd 至 $containerd_version"
             fi
           fi
 
@@ -108,14 +114,44 @@ jobs:
               "https://codeload.github.com/opencontainers/runc/tar.gz/v${runc_version}?"
             changed=true
             if [ -z "$message" ]; then
-              message="runc: update to $runc_version"
+              message="runc 至 $runc_version"
             else
-              message="$message; runc: update to $runc_version"
+              message="$message; runc 至 $runc_version"
+            fi
+          fi
+
+          if [ -f tini/Makefile ]; then
+            tini_tag=$(curl -fsSL "${auth[@]}" \
+              "https://api.github.com/repos/krallin/tini/releases/latest" | jq -r .tag_name)
+            tini_version=${tini_tag#v}
+
+            if ! [[ "$tini_version" =~ ^[0-9]+(\.[0-9]+)+$ ]]; then
+              echo "Error: unexpected latest tini release tag: $tini_tag"
+              exit 1
+            fi
+
+            if [ "$(get_version tini/Makefile)" != "$tini_version" ]; then
+              tini_sha=$(full_commit krallin/tini "v${tini_version}") || {
+                echo "Error: failed to resolve commit for krallin/tini v${tini_version}"
+                exit 1
+              }
+              update_makefile tini/Makefile "$tini_version" krallin/tini "v${tini_version}" \
+                "https://codeload.github.com/krallin/tini/tar.gz/v${tini_version}?"
+              # tini pins the full commit and a short commit instead of PKG_GIT_SHORT_COMMIT
+              sed -i "s/^PKG_SOURCE_VERSION:=.*/PKG_SOURCE_VERSION:=$tini_sha/" tini/Makefile
+              sed -i "s/^TINI_COMMIT:=.*/TINI_COMMIT:=${tini_sha:0:7}/" tini/Makefile
+              echo "Note: tini patches may need to be re-checked against v${tini_version}"
+              changed=true
+              if [ -z "$message" ]; then
+                message="tini 至 $tini_version"
+              else
+                message="$message; tini 至 $tini_version"
+              fi
             fi
           fi
 
           echo "updated=$changed" >> "$GITHUB_OUTPUT"
-          echo "message=$message" >> "$GITHUB_OUTPUT"
+          echo "message=chore: 更新 $message" >> "$GITHUB_OUTPUT"
 
       - name: commit and push
         if: steps.update.outputs.updated == 'true'

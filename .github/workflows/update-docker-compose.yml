@@ -1,8 +1,8 @@
-name: auto update docker-compose
+name: update docker-compose
 
 on:
   schedule:
-    - cron: '0 2 * * *'
+    - cron: '0 18 * * *'
   workflow_dispatch:
 
 permissions:
@@ -116,7 +116,7 @@ jobs:
 
           echo "Updated $makefile: $current -> $version"
           echo "updated=true" >> "$GITHUB_OUTPUT"
-          echo "message=docker-compose: update to $version" >> "$GITHUB_OUTPUT"
+          echo "message=chore: 更新 docker-compose 至 $version" >> "$GITHUB_OUTPUT"
 
       - name: commit and push
         if: steps.update.outputs.updated == 'true'
