@@ -23,7 +23,7 @@ GO_PKG_TAGS:=e2e,kube
 GO_PKG_INSTALL_ALL:=1
 
 include $(INCLUDE_DIR)/package.mk
-include ../../lang/golang/golang-package.mk
+include $(TOPDIR)/feeds/packages/lang/golang/golang-package.mk
 
 define Package/docker-compose
   SECTION:=utils
